@@ -2,6 +2,8 @@
 
 module TypeTheoryMeditation where
 
+import Data.List (find, partition)
+
 type Symbol = String
 
 type ValueSymbol = Symbol
@@ -12,7 +14,7 @@ type TypeSymbol = Symbol
 -- Terms
 -------------
 data Term = Var ValueSymbol
-          | Lambda ValueSymbol TypeSymbol Term
+          | Lambda TypeSymbol Term
           | Apply Term Term
           deriving (Eq)
 
@@ -20,11 +22,9 @@ instance Show Term where
   show term =
     case term of
          Var x -> x
-         Lambda x t innerTerm -> concat
+         Lambda x innerTerm -> concat
            [ "λ"
            , x
-           , ":"
-           , t
            , "."
            , show innerTerm
            ]
@@ -38,7 +38,7 @@ instance Show Term where
 
 -- Term Examples
 identityTerm :: Term
-identityTerm = Lambda "x" "a" (Var "x")
+identityTerm = Lambda "x" (Var "x")
 
 oneTerm :: Term
 oneTerm = Apply identityTerm (Var "one")
@@ -46,7 +46,7 @@ oneTerm = Apply identityTerm (Var "one")
 -------------
 -- Type
 -------------
-data Type = Typ TypeSymbol
+data Type = Type TypeSymbol
           | Type :-> Type
           deriving (Eq)
 infixr 9 :->
@@ -54,14 +54,14 @@ infixr 9 :->
 instance Show Type where
   show t =
     case t of
-         Typ symbol -> symbol
+         Type symbol -> symbol
          (a :-> b)  -> show a ++ " -> " ++ show b
 
 unaryFunction:: Type
-unaryFunction= Typ "a" :-> Typ "b"
+unaryFunction= Type "a" :-> Type "b"
 
 binaryFunction :: Type
-binaryFunction = Typ "a" :-> Typ "b" :-> Typ "c"
+binaryFunction = Type "a" :-> Type "b" :-> Type "c"
 
 -------------
 -- Type Assignment & Context
@@ -73,7 +73,7 @@ instance Show TypeAssignment where
   show (v ::: t) = v ++ " : " ++ show t
 
 typeAssignment :: TypeAssignment
-typeAssignment = "x" ::: Typ "Nat"
+typeAssignment = "x" ::: Type "Nat"
 
 type Context = [TypeAssignment]
 
@@ -89,75 +89,64 @@ data ContextedType = ContextedType { context :: Context
 infixr 8 |-
 (|-) :: Context -> Type -> ContextedType
 ctx |- t = ContextedType { context = ctx
-                           , typ     = t
-                           }
+                         , typ     = t
+                         }
 
 instance Show ContextedType where
   show ctype = show (context ctype) ++ " |- " ++ show (typ ctype)
 
 ctxType :: ContextedType
-ctxType = ["p" ::: Typ "Int", "p" ::: Typ "Nat"] |- Typ "Fraction"
+ctxType = ["p" ::: Type "Int", "p" ::: Type "Nat"] |- Type "Fraction"
 
 -------------
 -- Type Inference
 -------------
 
--- defaultTypeSymbols = [ a..z, aa..zz, aaa..zzz, aaaa .. ]
+-- defaultTypeSymbols = [ a..z, aa..zz, aaa..zzz, aaaa.. ]
 defaultTypeSymbols :: [TypeSymbol]
 defaultTypeSymbols =
   let alphabet :: [String]
       alphabet = (: []) <$> ['a'..'z']
     in (concat . iterate (zipWith (++) alphabet)) alphabet
 
+-- indexedPrimitiveType 1 = [ a1..z1, aa1..zz1, aaa1..zzz1, aaaa1.. ]
 indexedPrimitiveType :: Int -> [Type]
-indexedPrimitiveType n = Typ <$> zipWith (++) defaultTypeSymbols (show <$> repeat n)
+indexedPrimitiveType n = Type <$> zipWith (++) defaultTypeSymbols (show <$> repeat n)
 
+-- next [ a1..z1, aa1..zz1, aaa1.. ] = [ a2..z2, aa2..zz2, aaa2... ]
+-- next [ c1..z1, aa1..zz1, aaa1.. ] = [ a2..z2, aa2..zz2, aaa2... ]
 next :: [Type] -> [Type]
-next (Typ s:_) =
+next (Type s:_) =
   case read [last s] :: Int of
        n -> indexedPrimitiveType (n + 1)
 next _ = error "wrong input to next function"
 
+data Equality = Type :=: Type
+                        deriving (Show,Eq)
 
--- unify :: Type -> Type -> [()]
+type Equalities = [Equality]
 
-data InferenceTree = Var' ContextedType
-                   | Apply' (ContextedType, InferenceTree) ContextedType (ContextedType, InferenceTree)  
-                   | Lambda' ContextedType (ContextedType, InferenceTree)
-                   deriving (Show, Eq)
+combine :: Context -> (Context, Equalities) -> (Context, Equalities)
+combine [] ctx = ctx
+combine (ta@(x ::: a):tas) (ctx,eqs) =
+  case find (\y -> let (z ::: _) = y in x == z) ctx of
+       Nothing -> combine tas (ta:ctx,eqs)
+       Just (_ ::: b)  -> combine tas (ctx, a:=:b : eqs)
 
-mkInferenceTree :: Term -> InferenceTree
-mkInferenceTree = mkInferenceTree' (indexedPrimitiveType 0)
+infer :: Term -> (ContextedType, Equalities)
+infer = infer' (indexedPrimitiveType 0) 
 
-mkInferenceTree' :: [Type] -> Term -> InferenceTree
-mkInferenceTree' (a:b:vars) (Apply e1 e2) =
-  Apply'
-    ([] |- b :-> a, mkInferenceTree' (next vars) e1)
-    ([] |- a)
-    ([] |- b      , mkInferenceTree' (next (next vars)) e2)
-mkInferenceTree' (a:b:c:vars) (Lambda x _ e) =
-  Lambda'
-    ([] |- b :-> a)  
-    ([x ::: c] |- c , mkInferenceTree' (next vars) e)
-mkInferenceTree' (a:_) (Var x) = Var' $ [x ::: a] |- a 
-
-
--- infer :: Term -> ContextedType
--- infer = infer' defaultTypeSymbols
-
--- substitute :: Type -> Type -> Context -> Context 
--- substitute _ _ = id
-
--- infer' :: [Type] -> Term -> ContextedType
--- infer' (a:b:ts) term =
---     case term of
---          Apply f x ->
---            let [fCT,xCT] = map (infer' ts) [f,x]
---              in case typ fCT of
---                      p@(Typ _) ->
---                        let fRecomputedCtx :: Context
---                            fRecomputedCtx = substitute p (a :-> b) (context fCT)
---                            xRecomputedCtx = substitute a (typ xCT) (context xCT)
---                          in 
---                      (_ :-> _) -> context fCT
-
+infer' :: [Type] -> Term -> (ContextedType, Equalities)
+infer' [] _ = error "list of types provided to infer' is empty"
+infer' (t:_) (Var x) = ([x ::: t] |- t, []) 
+infer' (t:ts) (Apply f e) =
+  let (ContextedType{context = ctxF, typ = typF}, eqF) =  infer' (next ts) f
+      (ContextedType{context = ctxE, typ = typE}, eqE) =  infer' (next . next $ ts) e
+      (newCtx, ctxEqs) = combine ctxF (ctxE, [])
+      in (newCtx |- t, typF :=: (typE :-> t) : (ctxEqs ++ eqE ++ eqF))
+infer' (t:ts) (Lambda x e) = 
+  let (ContextedType{context = ctxE, typ = typE}, eqE) =  infer' (next ts) e
+    in case partition (\y -> let (z ::: _) = y in x == z) ctxE of
+            ([],_)               -> (ctxE    |- t :-> typE, eqE)
+            ([_ ::: b], restCtx) -> (restCtx |- b :-> typE, eqE)
+            _ -> error $ "ERROR: Context " ++ show ctxE ++ "has more than one "
