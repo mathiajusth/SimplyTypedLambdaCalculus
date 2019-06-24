@@ -1,12 +1,15 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE KindSignatures #-}
 
 module TypeTheoryMeditation where
 
 import Data.List (find, partition, groupBy, nub)
 import Data.Tuple.Extra (second)
 import Data.Foldable (toList)
+import Control.Monad (ap)
 
 type Symbol = String
 
@@ -60,10 +63,25 @@ data FreeArrowType a = Type a
           deriving (Eq)
 infixr 9 :->
 
+concatFAT :: forall a. FreeArrowType (FreeArrowType a) -> FreeArrowType a
+concatFAT (a :-> b) = concatFAT a :-> concatFAT b
+concatFAT (Type (Type x)) = Type x
+concatFAT (Type (y :-> z)) = y :-> z
+
 instance Functor FreeArrowType where
   fmap :: (a -> b) -> FreeArrowType a -> FreeArrowType b
   fmap f (p :-> q) = fmap f p :-> fmap f q
   fmap f (Type x) = Type $ f x
+
+instance Applicative FreeArrowType where
+  pure = Type
+  (<*>) = ap
+
+instance Monad FreeArrowType where
+  return :: forall a. a -> FreeArrowType a
+  return = pure
+  (>>=) :: forall a b. FreeArrowType a -> (a -> FreeArrowType b) -> FreeArrowType b
+  mx >>= mf = concatFAT (mf <$> mx)
 
 instance Foldable FreeArrowType where
   foldMap f (Type x) = f x
@@ -212,67 +230,140 @@ eqRight = eqBy rightHand
 isTrivial :: Equation -> Bool
 isTrivial eq = leftHand eq == rightHand eq
 
-newtype SubstitutionTree  = SubstitutionTree{iso:: (String, [FreeArrowType SubstitutionTree])}
-  deriving (Show, Eq)
+-- newtype SpecificationTree  = SpecificationTree{iso:: (String, [FreeArrowType SpecificationTree])}
+--   deriving (Show, Eq)
 
-shorterOrEqual :: Int -> SubstitutionTree -> Bool
-shorterOrEqual n pt = case iso pt of
-                            (_,[]) -> n >= 0 || error ""
-                            (_, subs) -> case n of
-                                                  0 -> False
-                                                  _ -> all (shorterOrEqual $ n - 1) (concatMap toList subs)
+-- shorterOrEqual :: Int -> SpecificationTree -> Bool
+-- shorterOrEqual n pt = case iso pt of
+--                             (_,[]) -> n >= 0 || error ""
+--                             (_, subs) -> case n of
+--                                                   0 -> False
+--                                                   _ -> all (shorterOrEqual $ n - 1) (concatMap toList subs)
 
 
-mkSubstitutionTree :: [Equation] -> String -> SubstitutionTree
-mkSubstitutionTree eqs s =
-  SubstitutionTree $ (s,) $
-    ( map (fmap (mkSubstitutionTree eqs) . rightHand)
-    . filter (\eq -> leftHand eq == Type s)
-    ) eqs
+-- mkSpecificationTree :: [Equation] -> String -> SpecificationTree
+-- mkSpecificationTree eqs s =
+--   SpecificationTree $ (s,) $
+--     ( map (fmap (mkSpecificationTree eqs) . rightHand)
+--     . filter (\eq -> leftHand eq == Type s)
+--     ) eqs
 
-areCyclic :: [Equation] -> Bool
-areCyclic eqs = ( not
-                . all (shorterOrEqual $ length eqs)
-                . map (mkSubstitutionTree eqs)
-                . nub
-                . map ( \a -> case a of
-                                   Type s -> s
-                                   _ -> error "left hands side of equation should be a simple type"
-                      )
-                . map leftHand
-                ) eqs
+-- areCyclic :: [Equation] -> Bool
+-- areCyclic eqs = ( not
+--                 . all (shorterOrEqual $ length eqs)
+--                 . map (mkSpecificationTree eqs)
+--                 . nub
+--                 . map ( \a -> case a of
+--                                    Type s -> s
+--                                    _ -> error "left hands side of equation should be a simple type"
+--                       )
+--                 . map leftHand
+--                 ) eqs
 
 --
 -- EQUALITY
 --
 
-data Substitution =
-  -- TODO: this constructor will be opaque
-  Subs { origin :: Type
-       , target :: Type
-       }
+data Specification m a =
+  Specification { origin :: a
+                , target :: m a
+                }
                   deriving (Eq)
 
--- TODO: only this contructor function can be used
-subs :: String -> Type -> Substitution
-subs s = Subs (Type s)
+-- subs :: String -> Type -> Specification
+-- subs s = Specification (Type s)
 
-instance Show Substitution where
-  show (Subs s a) = show s ++ " ==> " ++ show a
+instance (Show a, Show (m a)) => Show (Specification m a) where
+  show (Specification s a) = show s ++ " ==> " ++ show a
 
-isTrivialSubs :: Substitution -> Bool
-isTrivialSubs (Subs a b) = a == b 
+isTrivialSpecification :: (Monad m, Eq (m a)) => Specification m a -> Bool
+isTrivialSpecification (Specification a b) = return a == b 
 
-type Equality = [Substitution]
+-- type Equality = [Specification Char FreeArrowType]
 
--- toSubs :: Equation -> [Substitution]
--- toSubs eq  = filter (not . isTrivialSubs) $
+-- newtype SpecificationTree a = SpecificationTree (Specification a Inner)
+
+newtype SpecificationTree :: (* -> *) -> * -> * where
+  SpecificationTree :: Specification (SpecForest m) a -> SpecificationTree m a
+--   :: Specification a (List . m . SpecificationTree m)
+--   if type constructors could be composed
+
+newtype SpecForest :: (* -> *) -> * -> * where
+  SpecForest :: forall a m. [m (SpecificationTree m a)] -> SpecForest m a
+
+newtype R l m a = MkR (l (Compose m (R l m)) a)
+newtype ST a = MkSt (R Specification (Compose [] FreeArrowType) a)
+
+-- data ST :: (* -> *) where
+--   MkST :: R Specification (Compose [] FreeArrowType) a -> ST a
+
+-- type ST = R Specification (Compose [] FreeArrowType)
+
+newtype Compose :: (* -> *) -> (* -> *) -> (* -> *) where
+  Compose :: m (n a) -> Compose m n a
+  
+
+type Composition a = [FreeArrowType a]
+
+data DecisionTree :: * -> * where
+  Leaf :: forall a. a -> DecisionTree a
+  (:|)   :: forall a. DecisionTree a -> DecisionTree a -> DecisionTree a
+  (:&)  :: forall a. DecisionTree a -> DecisionTree a -> DecisionTree a
+  deriving (Show,Eq)
+
+-- mkSpecificationTree :: [Equation] -> String -> SpecificationTree
+-- mkSpecificationTree eqs s =
+--   SpecificationTree $ (s,) $
+--     ( map (fmap (mkSpecificationTree eqs) . rightHand)
+--     . filter (\eq -> leftHand eq == Type s)
+--     ) eqs
+
+-- instance Functor SpecificationTree where
+--   fmap :: forall a b. (a -> b) ->  SpecificationTree a -> SpecificationTree b
+--   fmap f mx = 
+
+
+----------
+-- OLD
+----------
+-- newtype SpecificationTree  = SpecificationTree{iso:: (String, [FreeArrowType SpecificationTree])}
+--   deriving (Show, Eq)
+
+-- shorterOrEqual :: Int -> SpecificationTree -> Bool
+-- shorterOrEqual n pt = case iso pt of
+--                             (_,[]) -> n >= 0 || error ""
+--                             (_, subs) -> case n of
+--                                                   0 -> False
+--                                                   _ -> all (shorterOrEqual $ n - 1) (concatMap toList subs)
+
+
+-- mkSpecificationTree :: [Equation] -> String -> SpecificationTree
+-- mkSpecificationTree eqs s =
+--   SpecificationTree $ (s,) $
+--     ( map (fmap (mkSpecificationTree eqs) . rightHand)
+--     . filter (\eq -> leftHand eq == Type s)
+--     ) eqs
+
+-- areCyclic :: [Equation] -> Bool
+-- areCyclic eqs = ( not
+--                 . all (shorterOrEqual $ length eqs)
+--                 . map (mkSpecificationTree eqs)
+--                 . nub
+--                 . map ( \a -> case a of
+--                                    Type s -> s
+--                                    _ -> error "left hands side of equation should be a simple type"
+--                       )
+--                 . map leftHand
+--                 ) eqs
+
+-- toSpecification :: Equation -> [Specification]
+-- toSpecification eq  = filter (not . isTrivialSpecification) $
 --                case eq of
---                     Type s    :=:  a        -> [Subs s a]
---                     a         :=:  Type s   -> [Subs s a]
---                     (o :-> p) :=: (r :-> q) -> toSubs (o :=: r) ++ toSubs (p :=: q) 
+--                     Type s    :=:  a        -> [Specification s a]
+--                     a         :=:  Type s   -> [Specification s a]
+--                     (o :-> p) :=: (r :-> q) -> toSpecification (o :=: r) ++ toSpecification (p :=: q) 
 
 -- toEquality :: [Equation] -> Equality
 -- toEquality eqs = if  areCyclic eqs
 --                      then error "Unsolvable"
---                      else concatMap toSubs eqs
+--                      else concatMap toSpecification eqs

@@ -27,8 +27,8 @@ data DecisionTree :: * -> * where
 (.&) :: forall a. DecisionTree a -> DecisionTree a -> DecisionTree a
 (.&) = And
 
-(.|) :: forall a. DecisionTree a -> DecisionTree a -> DecisionTree a
-(.|) = Or
+-- (.|) :: forall a. DecisionTree a -> DecisionTree a -> DecisionTree a
+-- (.|) = Or
 
 ---------
 -- Specify
