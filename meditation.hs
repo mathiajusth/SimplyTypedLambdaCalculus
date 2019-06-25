@@ -265,23 +265,25 @@ isTrivial eq = leftHand eq == rightHand eq
 ----------------
 -- SPECIFICATION
 ----------------
-data Specification m a =
+data GeneralSpecification m a =
   Specify { origin :: a
-                , target :: m a
-                }
-                  deriving (Eq)
+          , target :: m a
+          }
+            deriving (Eq)
 
-instance (Show a, Show (m a)) => Show (Specification m a) where
+type Specification = GeneralSpecification FreeArrowType String
+
+instance (Show a, Show (m a)) => Show (GeneralSpecification m a) where
   show (Specify s a) = show s ++ " ==> " ++ show a
 
-isTrivialSpecification :: (Monad m, Eq (m a)) => Specification m a -> Bool
+isTrivialSpecification :: (Monad m, Eq (m a)) => GeneralSpecification m a -> Bool
 isTrivialSpecification (Specify a b) = return a == b 
 
 -- type Equality = [Specification Char FreeArrowType]
 
 newtype Composition m n a = Compose (m (n a))
 newtype Recurse l m a = Recurse (l (Composition m (Recurse l m)) a)
-newtype SpecificationTree a = MkST (Recurse Specification (Composition [] FreeArrowType) a)
+newtype SpecificationTree a = MkST (Recurse GeneralSpecification (Composition [] FreeArrowType) a)
 
 -- mkSpecificationTree :: [Equation] -> String -> SpecificationTree
 -- mkSpecificationTree eqs s =
@@ -298,32 +300,77 @@ data DecisionTree a = Leaf a
                     | DecisionTree a :& DecisionTree a
     deriving (Show,Eq)
 
+instance Foldable DecisionTree where
+  foldMap f (Leaf x) = f x
+  foldMap f (a :| b) = foldMap f a `mappend` foldMap f b
+  foldMap f (a :& b) = foldMap f a `mappend` foldMap f b
+
 conjunct :: [DecisionTree a] -> DecisionTree a
 conjunct = foldr1 (:&)
 
 disjunt :: [DecisionTree a] -> DecisionTree a
 disjunt = foldr1 (:|)
 
-newtype DNF a = AND [ORed a]
-newtype ORed a = OR [a]
+type DNF a = [AND a]
+type AND a = [a]
 
-toDNF :: DecisionTree a -> DNF
-toDNF (Leaf x :& b) = 
+toDNF :: DecisionTree a -> DecisionTree a
+toDNF dt = case dt of
+                l :& r -> toDNF l .* toDNF r
+                l :| r -> toDNF l :| toDNF r
+                Leaf _ -> dt
 
+toNiceDNF :: DecisionTree a -> DNF a
+toNiceDNF = transform . toDNF
+  where transform (Leaf x) = [[x]]
+        transform (l :| r) = transform l ++ transform r
+        transform (l :& r) = [toList l ++ toList r]
 
+(.*) :: DecisionTree a -> DecisionTree a -> DecisionTree a
+(.*) dt dt' =
+  case (dt,dt') of
+       (l :| r, _) -> (l  .* dt') :| (r  .* dt')
+       (_ ,l :| r) -> (dt .* l  ) :| (dt .* r  )
+       _           -> dt :& dt'
 
-mkSpecDT :: [Equation] -> DecisionTree (Specification FreeArrowType String)
-mkSpecDT = conjunct . map unify . filter isTrivial
+mkSpecDT :: [Equation] -> DecisionTree Specification
+mkSpecDT = conjunct . map preUnify . filter (not . isTrivial)
 
-unify :: Equation -> DecisionTree (Specification FreeArrowType String)
-unify (a :=: b) =
+preUnify :: Equation -> DecisionTree Specification
+preUnify (a :=: b) =
   case (a, b) of
        (Type x, Type y) -> Leaf (Specify x (Type y))
                         :| Leaf (Specify y (Type y))
        (Type x, _     ) -> Leaf $ Specify x b
        (_     , Type x) -> Leaf $ Specify x a
-       (p:->q ,p':->q') -> unify (p :=: p')
-                        :& unify (q :=: q')  
+       (p:->q ,p':->q') -> preUnify (p :=: p')
+                        :& preUnify (q :=: q')  
+
+choseSpecs :: DNF Specification -> Maybe [Specification]
+choseSpecs = map (filter isAcyclic)
+
+isAcyclic :: [Specification] -> Bool
+isAyclic specs = (all (shorterOrEqual $ length specs)
+                . map (mkSpecificationTree eqs)
+                . nub
+                . map ( \a -> case a of
+                                   Type s -> s
+                                   _ -> error "left hands side of equation should be a simple type"
+                      )
+                . map (\spec -> let (Specify x a) = spec in x)
+                ) specs
+
+-- areCyclic :: [Equation] -> Bool
+-- areCyclic eqs = ( not
+--                 . all (shorterOrEqual $ length eqs)
+--                 . map (mkSpecificationTree eqs)
+--                 . nub
+--                 . map ( \a -> case a of
+--                                    Type s -> s
+--                                    _ -> error "left hands side of equation should be a simple type"
+--                       )
+--                 . map leftHand
+--                 ) eqs
 
 
 ----------
