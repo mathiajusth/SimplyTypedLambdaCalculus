@@ -200,8 +200,10 @@ eqBy f x y = f x == f y
 -- EQUATIONS
 --
 
-data Equation = Type :=: Type
+data FreeEquations a = a :=: a
                         deriving (Show,Eq)
+
+type Equation = FreeEquations (FreeArrowType String)
 
 
 swap :: Equation -> Equation
@@ -260,56 +262,26 @@ isTrivial eq = leftHand eq == rightHand eq
 --                 . map leftHand
 --                 ) eqs
 
---
--- EQUALITY
---
-
+----------------
+-- SPECIFICATION
+----------------
 data Specification m a =
-  Specification { origin :: a
+  Specify { origin :: a
                 , target :: m a
                 }
                   deriving (Eq)
 
--- subs :: String -> Type -> Specification
--- subs s = Specification (Type s)
-
 instance (Show a, Show (m a)) => Show (Specification m a) where
-  show (Specification s a) = show s ++ " ==> " ++ show a
+  show (Specify s a) = show s ++ " ==> " ++ show a
 
 isTrivialSpecification :: (Monad m, Eq (m a)) => Specification m a -> Bool
-isTrivialSpecification (Specification a b) = return a == b 
+isTrivialSpecification (Specify a b) = return a == b 
 
 -- type Equality = [Specification Char FreeArrowType]
 
--- newtype SpecificationTree a = SpecificationTree (Specification a Inner)
-
-newtype SpecificationTree :: (* -> *) -> * -> * where
-  SpecificationTree :: Specification (SpecForest m) a -> SpecificationTree m a
---   :: Specification a (List . m . SpecificationTree m)
---   if type constructors could be composed
-
-newtype SpecForest :: (* -> *) -> * -> * where
-  SpecForest :: forall a m. [m (SpecificationTree m a)] -> SpecForest m a
-
-newtype R l m a = MkR (l (Compose m (R l m)) a)
-newtype ST a = MkSt (R Specification (Compose [] FreeArrowType) a)
-
--- data ST :: (* -> *) where
---   MkST :: R Specification (Compose [] FreeArrowType) a -> ST a
-
--- type ST = R Specification (Compose [] FreeArrowType)
-
-newtype Compose :: (* -> *) -> (* -> *) -> (* -> *) where
-  Compose :: m (n a) -> Compose m n a
-  
-
-type Composition a = [FreeArrowType a]
-
-data DecisionTree :: * -> * where
-  Leaf :: forall a. a -> DecisionTree a
-  (:|)   :: forall a. DecisionTree a -> DecisionTree a -> DecisionTree a
-  (:&)  :: forall a. DecisionTree a -> DecisionTree a -> DecisionTree a
-  deriving (Show,Eq)
+newtype Composition m n a = Compose (m (n a))
+newtype Recurse l m a = Recurse (l (Composition m (Recurse l m)) a)
+newtype SpecificationTree a = MkST (Recurse Specification (Composition [] FreeArrowType) a)
 
 -- mkSpecificationTree :: [Equation] -> String -> SpecificationTree
 -- mkSpecificationTree eqs s =
@@ -318,9 +290,40 @@ data DecisionTree :: * -> * where
 --     . filter (\eq -> leftHand eq == Type s)
 --     ) eqs
 
--- instance Functor SpecificationTree where
---   fmap :: forall a b. (a -> b) ->  SpecificationTree a -> SpecificationTree b
---   fmap f mx = 
+---------------
+-- DECISION TREE
+---------------
+data DecisionTree a = Leaf a
+                    | DecisionTree a :| DecisionTree a
+                    | DecisionTree a :& DecisionTree a
+    deriving (Show,Eq)
+
+conjunct :: [DecisionTree a] -> DecisionTree a
+conjunct = foldr1 (:&)
+
+disjunt :: [DecisionTree a] -> DecisionTree a
+disjunt = foldr1 (:|)
+
+newtype DNF a = AND [ORed a]
+newtype ORed a = OR [a]
+
+toDNF :: DecisionTree a -> DNF
+toDNF (Leaf x :& b) = 
+
+
+
+mkSpecDT :: [Equation] -> DecisionTree (Specification FreeArrowType String)
+mkSpecDT = conjunct . map unify . filter isTrivial
+
+unify :: Equation -> DecisionTree (Specification FreeArrowType String)
+unify (a :=: b) =
+  case (a, b) of
+       (Type x, Type y) -> Leaf (Specify x (Type y))
+                        :| Leaf (Specify y (Type y))
+       (Type x, _     ) -> Leaf $ Specify x b
+       (_     , Type x) -> Leaf $ Specify x a
+       (p:->q ,p':->q') -> unify (p :=: p')
+                        :& unify (q :=: q')  
 
 
 ----------
