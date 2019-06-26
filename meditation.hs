@@ -277,33 +277,46 @@ instance (Show a, Show (m a)) => Show (GeneralSpecification m a) where
 isTrivialSpecification :: (Monad m, Eq (m a)) => GeneralSpecification m a -> Bool
 isTrivialSpecification (Specify a b) = return a == b 
 
-newtype Composition m n a = Compose (m (n a))
--- newtype Recurse l m a = MkRec (l (Composition m (Recurse l m)) a)
--- type SpecificationTree a = Recurse GeneralSpecification (Composition [] FreeArrowType) a
-newtype SpecificationTree a = MkST (GeneralSpecification
-                                      (Composition (Composition [] FreeArrowType) SpecificationTree)
-                                      a
-                                   )
 -- SpecificationTree :: * -> *
--- SpecificationTree a = GeneralSpecification (List . FreeArrowType . SpecificationTree a) a
+-- SpecificationTree a = GeneralSpecification (List . FreeArrowType . SpecificationTree) a
+-- ! but we cannot compose types, hence:
+newtype Composition m n a = Compose (m (n a))
+newtype SpecificationTree a = MkST
+  { unwrapST :: GeneralSpecification
+                 (Composition (Composition [] FreeArrowType) SpecificationTree)
+                 a
+  }
 
 mkSpecNode :: a -> [FreeArrowType (SpecificationTree a)] -> SpecificationTree a
 mkSpecNode x = MkST . Specify x . Compose . Compose
 
+lookAtSpecNode :: SpecificationTree a -> (a, [FreeArrowType (SpecificationTree a)])
+lookAtSpecNode (MkST (Specify x (Compose (Compose y)))) = (x,y)
+
 mkSpecTree :: [Specification] -> String -> SpecificationTree String
 mkSpecTree specs s =
-  mkSpecNode s $ (map ( fmap (mkSpecTree specs)
-                      . target
-                      )
+  mkSpecNode s $ ( map (fmap $ mkSpecTree specs)
+                 . map target
                  . filter ((== s) . origin)
                  ) specs
 
--- areAcyclic :: [Specification] -> Bool
--- areAcyclic specs = (all (shorterOrEqual $ length eqs)
---                    . map (mkSpecTree specs)
---                    . nub
---                    . map origin
---                    ) specs
+shorterOrEqual :: Int -> SpecificationTree a -> Bool
+shorterOrEqual n st = case lookAtSpecNode st of
+                           (_, []  )  -> n >= 0 || error "shorterOrEqual's first argument cannot be nagative"
+                           (_, specs) -> n /= 0 && all (shorterOrEqual $ n - 1) (concatMap toList specs)
+
+areAcyclic :: [Specification] -> Bool
+areAcyclic specs = (all (shorterOrEqual $ length specs)
+                   . map (mkSpecTree specs)
+                   . nub
+                   . map origin
+                   ) specs
+
+unify :: [Equation] -> [Specification]
+unify eqs =
+  case (find areAcyclic . toNiceDNF . mkSpecDT) eqs of
+       Nothing    -> error $ "Equations cannot be satisfied: " ++ show eqs
+       Just _ -> rlyUnify . deduplify $ eqs
 
 ---------------
 -- DECISION TREE
@@ -358,13 +371,6 @@ preUnify (a :=: b) =
        (_     , Type x) -> Leaf $ Specify x a
        (p:->q ,p':->q') -> preUnify (p :=: p')
                         :& preUnify (q :=: q')  
-
--- unify :: [Equation] -> [Specification]
--- unify eqs =
---   case (find isAcyclic . toNiceDNF) eqs of
---             Nothing -> error $ "Equations cannot be satisfied: " ++ eqs
---             Just specs -> specs
-
 
 -- isAcyclic :: [Specification] -> Bool
 -- isAcyclic specs = (all (shorterOrEqual $ length specs)
