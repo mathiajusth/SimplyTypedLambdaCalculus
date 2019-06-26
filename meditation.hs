@@ -1,8 +1,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE InstanceSigs #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ExplicitForAll #-}
-{-# LANGUAGE KindSignatures #-}
 
 module TypeTheoryMeditation where
 
@@ -279,18 +277,33 @@ instance (Show a, Show (m a)) => Show (GeneralSpecification m a) where
 isTrivialSpecification :: (Monad m, Eq (m a)) => GeneralSpecification m a -> Bool
 isTrivialSpecification (Specify a b) = return a == b 
 
--- type Equality = [Specification Char FreeArrowType]
-
 newtype Composition m n a = Compose (m (n a))
-newtype Recurse l m a = Recurse (l (Composition m (Recurse l m)) a)
-newtype SpecificationTree a = MkST (Recurse GeneralSpecification (Composition [] FreeArrowType) a)
+-- newtype Recurse l m a = MkRec (l (Composition m (Recurse l m)) a)
+-- type SpecificationTree a = Recurse GeneralSpecification (Composition [] FreeArrowType) a
+newtype SpecificationTree a = MkST (GeneralSpecification
+                                      (Composition (Composition [] FreeArrowType) SpecificationTree)
+                                      a
+                                   )
+-- SpecificationTree :: * -> *
+-- SpecificationTree a = GeneralSpecification (List . FreeArrowType . SpecificationTree a) a
 
--- mkSpecificationTree :: [Equation] -> String -> SpecificationTree
--- mkSpecificationTree eqs s =
---   SpecificationTree $ (s,) $
---     ( map (fmap (mkSpecificationTree eqs) . rightHand)
---     . filter (\eq -> leftHand eq == Type s)
---     ) eqs
+mkSpecNode :: a -> [FreeArrowType (SpecificationTree a)] -> SpecificationTree a
+mkSpecNode x = MkST . Specify x . Compose . Compose
+
+mkSpecTree :: [Specification] -> String -> SpecificationTree String
+mkSpecTree specs s =
+  mkSpecNode s $ (map ( fmap (mkSpecTree specs)
+                      . target
+                      )
+                 . filter ((== s) . origin)
+                 ) specs
+
+-- areAcyclic :: [Specification] -> Bool
+-- areAcyclic specs = (all (shorterOrEqual $ length eqs)
+--                    . map (mkSpecTree specs)
+--                    . nub
+--                    . map origin
+--                    ) specs
 
 ---------------
 -- DECISION TREE
@@ -346,19 +359,19 @@ preUnify (a :=: b) =
        (p:->q ,p':->q') -> preUnify (p :=: p')
                         :& preUnify (q :=: q')  
 
-choseSpecs :: DNF Specification -> Maybe [Specification]
-choseSpecs = map (filter isAcyclic)
+-- unify :: [Equation] -> [Specification]
+-- unify eqs =
+--   case (find isAcyclic . toNiceDNF) eqs of
+--             Nothing -> error $ "Equations cannot be satisfied: " ++ eqs
+--             Just specs -> specs
 
-isAcyclic :: [Specification] -> Bool
-isAyclic specs = (all (shorterOrEqual $ length specs)
-                . map (mkSpecificationTree eqs)
-                . nub
-                . map ( \a -> case a of
-                                   Type s -> s
-                                   _ -> error "left hands side of equation should be a simple type"
-                      )
-                . map (\spec -> let (Specify x a) = spec in x)
-                ) specs
+
+-- isAcyclic :: [Specification] -> Bool
+-- isAcyclic specs = (all (shorterOrEqual $ length specs)
+--                   . map (mkSpecDT eqs)
+--                   . nub
+--                   . map origin 
+--                   ) specs
 
 -- areCyclic :: [Equation] -> Bool
 -- areCyclic eqs = ( not
