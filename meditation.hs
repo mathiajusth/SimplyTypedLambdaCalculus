@@ -314,9 +314,20 @@ areAcyclic specs = (all (shorterOrEqual $ length specs)
 
 unify :: [Equation] -> [Specification]
 unify eqs =
-  case (find areAcyclic . toNiceDNF . mkSpecDT) eqs of
+  case (find areAcyclic . toNiceDNF . mkSpecDecisionTree) eqs of
        Nothing    -> error $ "Equations cannot be satisfied: " ++ show eqs
-       Just _ -> rlyUnify . deduplify $ eqs
+       Just _ -> (branchOut . nubEqs . concatMap simplifyEq) eqs
+
+nubEqs :: [Specification] -> [Specification]
+nubEqs = until (specs == nub specs) nubStep
+  where nubStep :: [Specification] -> [Specification]
+        nubStep = map collapse
+                . groupBy (\spec spec' -> origin spec == origin spec') 
+        collapse :: [Specification] -> Specification
+        collapse specs = (
+
+        )
+
 
 ---------------
 -- DECISION TREE
@@ -359,22 +370,25 @@ toNiceDNF = transform . toDNF
        (_ ,l :| r) -> (dt .* l  ) :| (dt .* r  )
        _           -> dt :& dt'
 
-mkSpecDT :: [Equation] -> DecisionTree Specification
-mkSpecDT = conjunct . map preUnify . filter (not . isTrivial)
+mkSpecDecisionTree :: [Equation] -> DecisionTree Specification
+mkSpecDecisionTree = conjunct
+                   . map mkSpecDecisionTree'
+                   . filter (not . isTrivial)
+                   . concatMap simplifyEq
 
-preUnify :: Equation -> DecisionTree Specification
-preUnify (a :=: b) =
+mkSpecDecisionTree' :: Equation -> DecisionTree Specification
+mkSpecDecisionTree' (a :=: b) =
   case (a, b) of
        (Type x, Type y) -> Leaf (Specify x (Type y))
                         :| Leaf (Specify y (Type y))
        (Type x, _     ) -> Leaf $ Specify x b
        (_     , Type x) -> Leaf $ Specify x a
-       (p:->q ,p':->q') -> preUnify (p :=: p')
-                        :& preUnify (q :=: q')  
+       (p:->q ,p':->q') -> mkSpecDecisionTree' (p :=: p')
+                        :& mkSpecDecisionTree' (q :=: q')  
 
 -- isAcyclic :: [Specification] -> Bool
 -- isAcyclic specs = (all (shorterOrEqual $ length specs)
---                   . map (mkSpecDT eqs)
+--                   . map (mkSpecDecisionTree eqs)
 --                   . nub
 --                   . map origin 
 --                   ) specs
